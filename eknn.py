@@ -197,6 +197,13 @@ class alan_eg(object):
             print('std_sample=',std_sample)
             print()
 
+    # Compute ln(likelihood)
+    def lnprob(self,theta):      
+        dM=(theta-self.mean_sample)/self.sigma_mean        
+        return (-0.5*np.dot(dM,dM) -
+                     self.ndim*0.5*np.log(2.0*math.pi) -
+                     np.sum(np.log(self.sigma_mean)))
+            
     # Define a routine to generate samples in parameter space:
     def Sampler(self,nsamples=1000):
 
@@ -218,14 +225,13 @@ class alan_eg(object):
         # Generate samples from an ndim-dimension multivariate gaussian:
         theta = np.random.normal(mean,sigma,size=(nsamples,ndim))
 
-        # Compute ln(likelihood):
         for i in range(nsamples):
-            dM=(theta[i,:]-mean)/sigma
-            f[i] = (-0.5*np.dot(dM,dM)-
-                               ndim*0.5*np.log(2.0*math.pi)-
-                               np.sum(np.log(sigma)))
+            f[i]=self.lnprob(theta[i,:])
 
         return theta, f   
+    def pos(self,n):
+        # Generate samples over prior space volume
+        return np.random.normal(self.mean_sample,5*self.sigma_mean,size=(n,self.ndim))
     
     def info(self):
         print("Example adabted from Alan's Jupyter notebook") 
@@ -269,7 +275,13 @@ class echain(object):
             XClass = getattr(sys.modules[__name__], method)
         else:
             XClass=method
-        self.method=XClass(*args)
+            
+        if hasattr(XClass, '__class__'):
+            print('eknn: method is an instance of a class')
+            self.method=XClass
+        else:
+            print('eknn: method is class variable .. instantiating class')
+            self.method=XClass(*args)
            
         #
         self.ndim = self.method.ndim
@@ -283,7 +295,7 @@ class echain(object):
         for ipow in self.idtrial:
             dp=(self.powmax-self.powmin)/float(self.Ntrials-1)
             self.powers[ipow] = self.powmin+float(ipow)*dp
-            self.nchain[ipow] = int(pow(10.,self.powers[ipow]))        
+            self.nchain[ipow] = 2000#int(pow(10.,self.powers[ipow]))        
             
         try:
             print()
@@ -316,7 +328,7 @@ class echain(object):
 
         # Loop over different numbers of MCMC samples (=S):
         itot=0
-        for ipow,p,S in zip(self.idtrial,self.powers,self.nchain):                
+        for ipow,S in zip(self.idtrial,self.nchain):                
             
             DkNN    = np.zeros((S,kmax+1))
             indices = np.zeros((S,kmax+1))
