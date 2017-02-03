@@ -161,8 +161,99 @@ class harry_eg(object):
         return '''Example adabted from Harry's Jupyter notebook. 
         \n{0}-dimensional Polynomial function.'''.format(self.ndim)    
 
-#============================================
+    
+#===================================
+#   2d likelihood for emcee sampler
+#==================================
+# Define the posterior PDF
+# Reminder: post_pdf(theta, data) = likelihood(data, theta) * prior_pdf(theta)
+# We take the logarithm since emcee needs it.
+#---------------    
+class model_2d(object):
+    def __init__(self,p=[-0.9594,4.294],pprior=None,
+                 N=50,x=None,**kwargs):
+    
+        f=lambda t,s: np.array([t-s*abs(t),t+s*abs(t)])
+        
+        if pprior is None:
+            self.pprior={'p'+str(i) : f(t,10) for i,t in enumerate(p) }
+            
+        self.label=self.pprior.keys()
+        self.ndim=len(p)
+        self.p=p        
+        if x is None:
+            self.N=N
+            self.x = np.sort(10*np.random.rand(N))
+        else:
+            self.N=len(x)
+            self.x=x
+            
+        self.y,self.yerr=self.data(**kwargs)
+        
+    # As prior, we assume an 'uniform' prior (i.e. constant prob. density)
+    def inprior(self,t,i):
+        prange=self.pprior[self.label[i]]
+        if  prange[0] < t < prange[1]:
+            return 1.0
+        else:
+            return 0.0
 
+    def lnprior(self,theta):
+        for i,t in enumerate(theta):
+            if self.inprior(t,i)==1.0:
+                pass
+            else:
+                return -np.inf
+        return 0.0
+        
+
+    # As likelihood, we assume the chi-square. 
+    def lnlike(self,theta):
+        m, b = theta
+        model = m * self.x + b
+        return -0.5*(np.sum( ((self.y-model)/self.yerr)**2. ))
+
+    def lnprob(self,theta):
+        lp = self.lnprior(theta)
+        if not np.isfinite(lp):
+            return -np.inf
+        return lp + self.lnlike(theta)
+
+    def data(self,sigma=0.5,aerr=0.2):
+        # Generate synthetic data from a model.
+        # For simplicity, let us assume a LINEAR model y = m*x + b
+        # where we want to fit m and b      
+        yerr = aerr + sigma*np.random.rand(self.N)
+        y = self.p[0]*self.x + self.p[1]
+        y += sigma * np.random.randn(self.N) 
+        return y,yerr
+    
+    def pos(self,nwalkers):
+        # uniform sample over prior space
+        # will be used as starting place for
+        # emcee sampler
+        r=np.random.rand(nwalkers,self.ndim)
+        pos=r
+        for i,k in enumerate(self.pprior):
+            prange=self.pprior[k]            
+            psize = prange.max() - prange.min()
+            pos[:,i]=prange.min()+psize*r[:,i]
+        return pos
+    
+    def vis(self,n=300,figsize=(10,10),**kwargs):
+        # Visualize the chains
+        try:
+            import corner 
+            fig = corner.corner(self.pos(n), 
+                                labels=self.label, 
+                                truths=self.p,**kwargs)            
+            fig.set_size_inches(figsize) 
+        except:
+            print('corner package not installed - no plot is produced.')
+            pass
+
+#     
+#============================================
 class alan_eg(object):
     def __init__(self,ndim=10,ndata=100000,verbose=1):
         #  Generate data
@@ -244,9 +335,16 @@ class alan_eg(object):
 #===================================
 
 class echain(object):
-    # Ntrials:  number of MCMC samples. These are equally-spaced logarithmically between limit given by:
-    # powmin, powmax: 10^powmin, 10^powmax are the minimum and maximum numbers of samples.  
-    #                 Typical MCMC has ~10^5 samples. powmax=5 is reasonably fast. powmax=6 takes hours.
+    # nbatch:  number of MCMC samples. The sample sizes at each 
+    # batch is dertermined from brange: 
+    #   if brange= N [constant number] then bscale='constant' 
+    #                 and constant sample sizes at each batch
+    #   if brange is a list
+    #       bscale='lowpower':  equally-spaced logarithmically between limit given by:
+    #                           powmin, powmax: 10^powmin, 10^powmax are 
+    #                           the minimum and maximum numbers of samples.  
+    #       bscale='linear':  equally-spaced linear batch sizes from brange.min() to brange.max()    
+    #                 
     # kmax:           The results are plotted using kth-nearest-neighbours, with k between 1 and kmax-1. 
     # method:    a python class with at least __init__(args) and Sampler(nsamples) functions
     # args:      arguments to be passed to method __init__ function
@@ -255,61 +353,109 @@ class echain(object):
     #             1 - Essentials for checking sanity of the evidence calculation
     #             2 or more - debugging
     
-    def __init__(self,Ntrials = 20,
-                      powmin  = 3,
-                      powmax  = 4.5,
+    def __init__(self,nbatch = 20,
+                      brange=[3,4.5],
+                      bscale='logpower',
                       kmax    = 5,        
                       method='alan_eg',
-                      args={},
+                      args={},                      
+                      ischain=False,
                       verbose=1):
         #
         self.verbose=verbose
         #
-        self.powmin=powmin
-        self.powmax=powmax
-        self.kmax=kmax
-        self.Ntrials=Ntrials
-        print('my method',method)
-        #given a class name, get an instance
-        if isinstance(method,str):
-            XClass = getattr(sys.modules[__name__], method)
-        else:
-            XClass=method
-            
-        if hasattr(XClass, '__class__'):
-            print('eknn: method is an instance of a class')
-            self.method=XClass
-        else:
-            print('eknn: method is class variable .. instantiating class')
-            self.method=XClass(*args)
-           
-        #
-        self.ndim = self.method.ndim
-        
+        self.nbatch=nbatch
+        self.brange=brange #todo: check for [N] 
+        self.bscale=bscale if not isinstance(self.brange,int) else 'constant'
         # The arrays of powers and nchain record the number of samples 
         # that will be analysed at each iteration. 
         #idtrial is just an index
-        self.idtrial=np.arange(self.Ntrials)
-        self.powers  = np.zeros(self.Ntrials)
-        self.nchain  = self.idtrial*0   
-        for ipow in self.idtrial:
-            dp=(self.powmax-self.powmin)/float(self.Ntrials-1)
-            self.powers[ipow] = self.powmin+float(ipow)*dp
-            self.nchain[ipow] = 2000#int(pow(10.,self.powers[ipow]))        
+        self.idbatch=np.arange(self.nbatch)
+        self.powers  = np.zeros(self.nbatch)
+        self.bsize  = np.zeros(self.nbatch)
+        self.nchain  = self.bsize         
+        self.set_batch()
+        #
+        self.kmax=kmax
+        #
+        self.ischain=ischain
+        #
+        if ischain:
+            if isinstance(method,str):
+                print('my method',method)
+                pass
+                #read chain
+            else:
+                print('dictionary of samples and loglike array passed')
+                self.method=method
+            #
+            self.ndim=self.method['samples'].shape[-1]            
+            print('dimension of chain=',self.ndim)
+        else:
+            #given a class name, get an instance
+            if isinstance(method,str):
+                print('my method',method)
+                XClass = getattr(sys.modules[__name__], method)
+            else:
+                XClass=method
             
-        try:
-            print()
-            msg=self.method.info()                        
-            print()
-        except:
-            pass        
+            if hasattr(XClass, '__class__'):
+                print('eknn: method is an instance of a class')
+                self.method=XClass
+            else:
+                print('eknn: method is class variable .. instantiating class')
+                self.method=XClass(*args)           
+            #
+            self.ndim = self.method.ndim
+         
+        #
+        if not ischain:    
+            try:
+                print()
+                msg=self.method.info()                        
+                print()
+            except:
+                pass        
 
+    def get_batch_range(self):
+        powmin=np.array(self.brange).min()
+        powmax=np.array(self.brange).max()
+        if powmin==powmax and self.nbatch>1:
+            print('nbatch>1 but batch range is set to zero.')
+            raise
+        return powmin,powmax
+    
+    def set_batch(self,bscale=None):
+        if bscale is None:
+            bscale=self.bscale
+            
+        if bscale=='logpower':
+            powmin,powmax=self.get_batch_range()
+            self.powers=np.linspace(powmin,powmax,self.nbatch)
+            self.bsize = np.array([int(pow(10.0,x)) for x in self.powers])
+            self.nchain=self.bsize
+       
+        elif bscale=='linear':   
+            powmin,powmax=self.get_batch_range()
+            self.bsize=np.linspace(powmin,powmax,self.nbatch,dtype=np.int)
+            self.powers=np.array([int(log10(x)) for x in self.nchain])
+            self.nchain=self.bsize
+            
+        else: #constant
+            self.bsize=self.brange #check
+            self.powers=self.idbatch
+            self.nchain=self.bsize.cumsum()
+            
     def get_samples(self,nsamples,istart=0):    
         # If we are reading chain, it will be handled here 
         # istart -  will set row index to start getting the samples 
-    
-        # Generate samples in parameter space by using the passed method        
-        samples,fs=self.method.Sampler(nsamples=nsamples)                 
+        
+        if self.ischain:
+            samples=self.method['samples'][istart:nsamples+istart,:]
+            fs=self.method['lnprob'][istart:nsamples+istart]
+        else:
+            # Generate samples in parameter space by using the passed method        
+            samples,fs=self.method.Sampler(nsamples=nsamples)                 
         
         return samples, fs
         
@@ -324,17 +470,17 @@ class echain(object):
         kmax=self.kmax
         ndim=self.ndim
         
-        MLE     = np.zeros((self.Ntrials,kmax+1))
+        MLE     = np.zeros((self.nbatch,kmax+1))
 
         # Loop over different numbers of MCMC samples (=S):
         itot=0
-        for ipow,S in zip(self.idtrial,self.nchain):                
+        for ipow,S in zip(self.idbatch,self.nchain):                
             
             DkNN    = np.zeros((S,kmax+1))
             indices = np.zeros((S,kmax+1))
             volume  = np.zeros((S,kmax+1))
             
-            samples,fs=self.get_samples(S,istart=itot)
+            samples,fs=self.get_samples(S,istart=itot)            
 
             # Use sklearn nearest neightbour routine, which chooses the 'best' algorithm.
             # This is where the hard work is done:
@@ -363,11 +509,47 @@ class echain(object):
                 if ipow==0: 
                     print('(iter,mean,min,max) of LogLikelihood: ',ipow,fs.mean(),fs.min(),fs.max())
                     print('-------------------- useful intermediate parameter values ------- ')
-                    print('iter, nsample, dotp, median volume, amax, MLE')
-                print(ipow,S,k,dotp,statistics.median(volume[:,k]),amax,MLE[ipow,k])
+                    print('nsample, dotp, median volume, amax, MLE')                
+                print(S,k,dotp,statistics.median(volume[:,k]),amax,MLE[ipow,k])
                 
         return MLE
+    
+    def vis_mle(self,MLE,figsize=(15,15),**kwargs):
+        #visualise 
+        kmax=self.kmax
+        ndim=self.ndim
+        nchain=self.nchain #.cumsum()
+        powers=self.powers
 
+        fig,ax=plt.subplots(figsize=figsize)
+        plt.subplot(2,2,1)
+        plt.plot(powers,np.log10(MLE[:,1:kmax]))
+        plt.xlabel('log N')
+        plt.ylabel('$log(\hat E / E_{true})$')
+        plt.title('Evidence ratio')
+        plt.legend(['k=%s'%k for k in range(1,kmax+1)])
+
+        plt.subplot(2,2,2)
+        plt.plot(nchain,MLE[:,1:kmax])
+        plt.xlabel('N')
+        plt.ylabel('$\hat E / E_{true}$')
+        plt.title('Evidence ratio')
+
+        plt.subplot(2,2,3)
+        plt.plot(1.0/nchain,MLE[:,1:kmax])
+        plt.xlabel('1/N')
+        plt.ylabel('$\hat E / E_{true}$')
+        plt.title('Evidence ratio')
+
+        plt.subplot(2,2,4)
+        plt.plot(pow(nchain,-1.0/ndim),MLE[:,1:kmax])
+        plt.xlabel('$1/N^{1/d}$')
+        plt.ylabel('$\hat E / E_{true}$')
+        plt.title('Evidence ratio')
+
+        plt.tight_layout()        
+
+           
 
 #===============================================
 
