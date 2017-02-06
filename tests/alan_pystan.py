@@ -69,11 +69,11 @@ try:
 except:
     # Get pystan chain-- this will convert our pystan code into C++
     # and run MCMC
-    if alan_fit in locals():
+    try:
         #faster as we don't need C++ compiling
         alan_fit = pystan.stan(fit=alan_fit, data=mvgauss_dat, 
                                iter=100000, chains=4)     
-    else:
+    except:
         alan_fit = pystan.stan(model_code=mvgauss_code, data=mvgauss_dat,
                       iter=100000, chains=4)    
     
