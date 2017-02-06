@@ -18,6 +18,8 @@ from numpy.linalg import inv
 from numpy.linalg import det
 from functools import reduce
 
+from wrap import *
+
 try:
     import getdist
     from getdist import MCSamples, chains, IniFile    
@@ -389,8 +391,9 @@ class echain(object):
                 print('dictionary of samples and loglike array passed')
                 self.method=method
             #
-            self.ndim=self.method['samples'].shape[-1]            
-            print('dimension of chain=',self.ndim)
+            self.ndim=self.method['samples'].shape[-1] 
+            nsample=self.method['samples'].shape[0]
+            print('chain array dimensions: %s x %s ='%(nsample,self.ndim))
         else:
             #given a class name, get an instance
             if isinstance(method,str):
@@ -428,6 +431,8 @@ class echain(object):
     def set_batch(self,bscale=None):
         if bscale is None:
             bscale=self.bscale
+        else:
+            self.bscale=bscale
             
         if bscale=='logpower':
             powmin,powmax=self.get_batch_range()
@@ -446,13 +451,22 @@ class echain(object):
             self.powers=self.idbatch
             self.nchain=self.bsize.cumsum()
             
-    def get_samples(self,nsamples,istart=0):    
+    def get_samples(self,nsamples,istart=0,rand=False):    
         # If we are reading chain, it will be handled here 
         # istart -  will set row index to start getting the samples 
         
         if self.ischain:
-            samples=self.method['samples'][istart:nsamples+istart,:]
-            fs=self.method['lnprob'][istart:nsamples+istart]
+            if rand:
+                ntot=self.method['samples'].shape[0]
+                if nsamples>ntot:
+                    print('nsamples=%s, ntotal_chian=%s'%(nsamples,ntot))
+                    raise
+                idx=np.random.randint(0,high=ntot,size=nsamples)
+                samples=self.method['samples'][istart:nsamples+istart,:]
+                fs=self.method['lnprob'][istart:nsamples+istart]
+            else:
+                samples=self.method['samples'][istart:nsamples+istart,:]
+                fs=self.method['lnprob'][istart:nsamples+istart]                
         else:
             # Generate samples in parameter space by using the passed method        
             samples,fs=self.method.Sampler(nsamples=nsamples)                 
@@ -460,10 +474,11 @@ class echain(object):
         return samples, fs
         
         
-    def chains2evidence(self,verbose=None):
+    def chains2evidence(self,verbose=None,rand=False,profile=False):
         # MLE=maximum likelihood estimate of evidence:
         #
         
+            
         if verbose is None:
             verbose=self.verbose
             
@@ -471,6 +486,11 @@ class echain(object):
         ndim=self.ndim
         
         MLE     = np.zeros((self.nbatch,kmax+1))
+        
+        if profile:
+            print('time profiling scikit knn ..')
+            profile_data = np.zeros((self.nbatch,2))
+        
 
         # Loop over different numbers of MCMC samples (=S):
         itot=0
@@ -480,12 +500,20 @@ class echain(object):
             indices = np.zeros((S,kmax+1))
             volume  = np.zeros((S,kmax+1))
             
-            samples,fs=self.get_samples(S,istart=itot)            
+            samples,fs=self.get_samples(S,istart=itot,rand=rand)            
 
             # Use sklearn nearest neightbour routine, which chooses the 'best' algorithm.
             # This is where the hard work is done:
-            nbrs          = NearestNeighbors(n_neighbors=kmax+1, algorithm='auto').fit(samples)
-            DkNN, indices = nbrs.kneighbors(samples)
+            if profile:
+                with Timer() as t:
+                    nbrs          = NearestNeighbors(n_neighbors=kmax+1, algorithm='auto').fit(samples)
+                    DkNN, indices = nbrs.kneighbors(samples)
+                                    
+                profile_data[ipow,0]=S
+                profile_data[ipow,1]=t.secs                    
+            else:
+                nbrs          = NearestNeighbors(n_neighbors=kmax+1, algorithm='auto').fit(samples)
+                DkNN, indices = nbrs.kneighbors(samples)                
     
             # Create the posterior for 'a' from the distances (volumes) to nearest neighbour:
             for k in range(1,self.kmax):
@@ -511,8 +539,11 @@ class echain(object):
                     print('-------------------- useful intermediate parameter values ------- ')
                     print('nsample, dotp, median volume, amax, MLE')                
                 print(S,k,dotp,statistics.median(volume[:,k]),amax,MLE[ipow,k])
-                
-        return MLE
+                                    
+        if profile:
+            return (MLE, profile_data)
+        else:  
+            return MLE
     
     def vis_mle(self,MLE,figsize=(15,15),**kwargs):
         #visualise 

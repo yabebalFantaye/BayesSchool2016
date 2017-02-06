@@ -31,9 +31,9 @@ try:
             ndim=chain.shape[-1]
 
             if names is None:
-                names = ["%s%s"%(px,i) for i in range(ndim)]
+                names = ["%s%s"%('p',i) for i in range(ndim)]
             if labels is None:
-                labels =  ["$%s_%s$"%(px,i) for i in range(ndim)]
+                labels =  ["%s_%s"%(px,i) for i in range(ndim)]
 
             self.names=names
             self.labels=labels
@@ -50,7 +50,7 @@ try:
             #let's trangle plot chain samples
             try:
                 import corner
-                fig = corner.corner(self.samples.samples, labels=self.labels,
+                fig = corner.corner(self.samples.samples, labels=['$%s$'%x for x in self.labels],
                               truths=self.trueval, quantiles=[0.16, 0.5, 0.84], 
                             show_titles=True, labels_args={"fontsize": 10})
                 fig.set_size_inches(figsize)        
@@ -144,13 +144,13 @@ try:
             self.samples = self.emcee_sampler.flatchain        
             self.emcee_sampler.reset()
 
-        def mcmc(self,nmcmc=2000):
+        def mcmc(self,nmcmc=2000,**kwargs):
             # perform MCMC - no resetting 
             # size of the chain increases in time
             time0 = time.time()
             #
             #pos=None makes the chain start from previous state of sampler
-            self.pos, self.prob, self.state  = self.emcee_sampler.run_mcmc(self.pos,nmcmc)
+            self.pos, self.prob, self.state  = self.emcee_sampler.run_mcmc(self.pos,nmcmc,**kwargs)
             self.samples = self.emcee_sampler.flatchain    
             self.lnp = self.emcee_sampler.flatlnprobability
             #
@@ -224,3 +224,20 @@ try:
 except:
     print('the corner package is nice chain visualiser. Install it or comment out the lines below.')
 #
+
+import time
+class Timer(object):
+    #Ref: https://www.huyng.com/posts/python-performance-analysis
+    def __init__(self, verbose=False):
+        self.verbose = verbose
+
+    def __enter__(self):
+        self.start = time.time()
+        return self
+
+    def __exit__(self, *args):
+        self.end = time.time()
+        self.secs = self.end - self.start
+        self.msecs = self.secs * 1000  # millisecs
+        if self.verbose:
+            print('elapsed time: %f ms' % self.msecs)
