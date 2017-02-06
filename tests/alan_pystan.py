@@ -140,21 +140,24 @@ from sklearn.neighbors import NearestNeighbors, DistanceMetric
 print('analysing sckit knn #CPU scaling')
 
 kmax=5
-#nproc_list=[1,5,10,15,20,25,30,35,40,45]
-nproc_list=[1,2]
+nproc_list=[1,5,10,15,20,25,30,35,40,45]
+#nproc_list=[1,2]
 
 try:
     profile_nproc=np.loadtxt('output/alan_t_vs_nproc_profile.txt')
 except:
     profile_nproc = np.zeros((len(nproc_list),2))
     for ipow,nproc in enumerate(nproc_list):
+        print('using nproc=%s'%nproc)
         with Timer() as t:
             nbrs = NearestNeighbors(n_neighbors=kmax+1,
                                     algorithm='auto',
-                                    n_jobs=nproc).fit(alan_stan_chain['samples'][::20,:])
+                                    n_jobs=nproc).fit(alan_stan_chain['samples'][::5,:])
         
-            DkNN, indices = nbrs.kneighbors(alan_stan_chain['samples'][::20,:])
+            DkNN, indices = nbrs.kneighbors(alan_stan_chain['samples'][::5,:])
 
+        print('elapsed time: %f ms' % t.secs)
+        
     profile_nproc[ipow,0]=nproc
     profile_nproc[ipow,1]=t.secs
     np.loadtxt('output/alan_t_vs_nproc_profile.txt',profile_nproc)

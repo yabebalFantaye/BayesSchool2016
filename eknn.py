@@ -474,7 +474,7 @@ class echain(object):
         return samples, fs
         
         
-    def chains2evidence(self,verbose=None,rand=False,profile=False):
+    def chains2evidence(self,verbose=None,rand=False,profile=False,nproc=-1):
         # MLE=maximum likelihood estimate of evidence:
         #
         
@@ -506,13 +506,15 @@ class echain(object):
             # This is where the hard work is done:
             if profile:
                 with Timer() as t:
-                    nbrs          = NearestNeighbors(n_neighbors=kmax+1, algorithm='auto').fit(samples)
+                    nbrs          = NearestNeighbors(n_neighbors=kmax+1, 
+                                                     algorithm='auto',n_jobs=nproc).fit(samples)
                     DkNN, indices = nbrs.kneighbors(samples)
                                     
                 profile_data[ipow,0]=S
                 profile_data[ipow,1]=t.secs                    
             else:
-                nbrs          = NearestNeighbors(n_neighbors=kmax+1, algorithm='auto').fit(samples)
+                nbrs          = NearestNeighbors(n_neighbors=kmax+1, 
+                                                 algorithm='auto',n_jobs=nproc).fit(samples)
                 DkNN, indices = nbrs.kneighbors(samples)                
     
             # Create the posterior for 'a' from the distances (volumes) to nearest neighbour:

@@ -1,28 +1,6 @@
 
 # coding: utf-8
 
-# In[1]:
-
-get_ipython().magic(u'load_ext autoreload')
-get_ipython().magic(u'autoreload 2')
-
-#%load_ext memory_profiler
-#%load_ext line_profiler
-
-
-# In[26]:
-
-#use case example
-#%lprun -f range range(100000)
-#%mprun >>
-
-# with Timer() as t:
-#     range(1000)
-# print("elasped lpush: %s s" % t.secs)
-
-
-# In[3]:
-
 from __future__ import print_function
 import IPython
 import pickle
@@ -50,105 +28,9 @@ try:
 except:
     pass
 
-get_ipython().magic(u'matplotlib inline')
-
-
-# ## PyStan example
-
-# In[4]:
-
-import pystan
-
-# First we will write our Baysian model using
-# Stan code. 
-# We will then define our data and call pystan 
-# to do MCMC sampling using NUT sampler
-# 
-mvgauss_code="""
-data {
-  int<lower=1> N;
-  vector[N] v;
-  vector[N] y;
-}
-parameters {
-  vector[N] mu; 
-}
-transformed parameters {  
-  cov_matrix[N] Sigma;
-  for (i in 1:N) 
-    for (j in 1:N)
-      Sigma[i,j] <- 0 + if_else(i==j, v[i], 0.0);
-}
-model {
-  increment_log_prob(multi_normal_log(y,mu,Sigma));
-  // y ~ multi_normal(mu,Sigma); //drops constants
-}
-"""
-
-# Define data model: we will use 10-dimensional Gaussian
-# as given in the alan_eg
-dmv=eknn.alan_eg()
-mvgauss_dat={'y':dmv.mean_sample,
-             'v':dmv.sigma_mean**2,
-             'N':dmv.ndim}
-
-#file name where to save/read chain
-cache_falan='chains/alan_pystan_chain.pkl'
-
-#read chain from cache if possible 
-try:
-    #raise
-    print('reading chain from: '+cache_falan)
-    alan_stan_chain = pickle.load(open(cache_falan, 'rb'))
-except:
-    # Get pystan chain-- this will convert our pystan code into C++
-    # and run MCMC
-    if alan_fit in locals():
-        #faster as we don't need C++ compiling
-        alan_fit = pystan.stan(fit=alan_fit, data=mvgauss_dat, 
-                               iter=100000, chains=4)     
-    else:
-        alan_fit = pystan.stan(model_code=mvgauss_code, data=mvgauss_dat,
-                      iter=100000, chains=4)    
-    
-
-    # Extract PyStan chain for Harry's GLM example
-    alan_stan_chain=alan_fit.extract(permuted=True)   
-    print('writing chain in: '+cache_falan)
-    with open(cache_falan, 'wb') as f:
-            pickle.dump(alan_stan_chain, f)
-            
-if 'mu' in alan_stan_chain.keys(): alan_stan_chain['samples']=alan_stan_chain.pop('mu')
-if 'lp__' in alan_stan_chain.keys(): alan_stan_chain['lnprob']=alan_stan_chain.pop('lp__')
-    
-print('chain shape: ',alan_stan_chain['samples'].shape)
-
-
-# In[34]:
-
-#
-gdstans=samples2gdist(alan_stan_chain['samples'],alan_stan_chain['lnprob'],
-                     trueval=dmv.mean,px='m')
-gdstans.corner()
-
-
-# In[ ]:
-
-# Here given pystan samples and log probability, we compute evidence ratio 
-ealan=eknn.echain(method=alan_stan_chain,verbose=2,ischain=True,brange=[3,5])
-MLE,ptime=ealan.chains2evidence(rand=True,profile=True) 
-ealan.vis_mle(MLE)
-
 
 # In[6]:
 
-# plot KNN timing profile
-fig,ax=plt.subplots(figsize=(15,6))
-plt.plot(np.log10(ptime[:,0]),ptime[:,1])
-plt.xlabel('log N')
-plt.ylabel('Time in Seconds')
-plt.title('Scikit KNN time profile')
-#plt.legend(['k=%s'%k for k in range(1,kmax+1)])
 
 
 # ### Pystan harry example 
