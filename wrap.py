@@ -201,6 +201,30 @@ except:
     print('emcee is not installed. You can not use the wrapper: make_emcee_chain')    
     
 
+#======================================
+#   Thin samples 
+#======================================
+def thin_samples(samples,lnp,w,nminwin=5,nthin=None):
+    print('Thinning samples ..')
+    gd_mc=samples2gdist(samples,lnp,weight=w,px='m')
+    if nthin is None:
+        ncorr=max(1,int(gd_mc.samples.getCorrelationLength(nminwin)))
+    else:
+        ncorr=nthin
+        
+    print('Samples are thinned by the correlation length of ',ncorr)
+    
+    gd_mc.samples.thin(ncorr)
+    thin_samples=gd_mc.samples.samples
+    thin_lnp=-gd_mc.samples.loglikes
+    thin_w=gd_mc.samples.weights
+    
+    print('Chain length before and after thinning: ',len(lnp),len(thin_lnp))
+    
+    return thin_samples,thin_lnp,w
+
+    
+    
 #====================================
 #      corner (triangle plot) use example 
 #====================================
