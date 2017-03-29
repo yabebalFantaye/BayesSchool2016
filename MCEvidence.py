@@ -16,9 +16,6 @@ Description :
 Python2.7 implementation of the evidence estimation from MCMC chains 
 as preesented in A. Heavens et. al. 2017
 (paper can be found here : https://arxiv.org/abs/ ).
-It uses the typical scikit-learn syntax  with a .fit() function for training
-and a .predict() function for predictions.
-
 """
 
 from __future__ import absolute_import
@@ -29,6 +26,7 @@ import itertools
 from functools import reduce
 import io
 
+import tempfile 
 import os
 import sys
 import math
@@ -37,61 +35,180 @@ import pandas as pd
 import sklearn as skl
 import statistics
 from sklearn.neighbors import NearestNeighbors, DistanceMetric
-import matplotlib.pyplot as plt
 import scipy.special as sp
 from numpy.linalg import inv
 from numpy.linalg import det
 
-from wrap import *
-
-try:
-    import getdist
-    from getdist import MCSamples, chains, IniFile    
-except ImportError:
-    print('Consider installing the GetDist module')
-    print()
-    print('       pip install getdist    ')
-    print()
 
 __author__ = "Yabebal Fantaye"
 __email__ = "yabi@aims.ac.za"
 __license__ = "MIT"
 __version__ = "0.1.1"
 __status__ = "Development"
+
+try:
+    from getdist import MCSamples, chains
+    from getdist import plots, IniFile
+    import getdist as gd
     
+    #====================================
+    #      Getdist wrapper
+    #====================================    
+    class samples2gdist(object):
+        #Ref:
+        #http://getdist.readthedocs.io/en/latest/plot_gallery.html
+
+        def __init__(self,str_or_dict,trueval=None,
+                    names=None,labels=None,px='x',**kwargs):
+            #Get the getdist MCSamples objects for the samples, specifying same parameter
+            #names and labels; if not specified weights are assumed to all be unity
+
+            if isinstance(str_or_dict,str):
+                
+                fileroot=str_or_dict
+                print('samples2gdist: string passed. Loading chain from '+fileroot)                
+                self.load_from_file(fileroot,**kwargs)
+                
+            elif isinstance(str_or_dict,dict):
+                
+                d=str_or_dict
+                chains=d['chains']
+                loglikes=d['loglikes']
+                weight=d['weight'] if 'weight' in d.keys() else np.ones(len(loglikes))
+
+                if names is None:
+                    names = ["%s%s"%('p',i) for i in range(ndim)]
+                if labels is None:
+                    labels =  ["%s_%s"%(px,i) for i in range(ndim)]
+                    
+                self.names=names
+                self.labels=labels
+                self.trueval=trueval
+                self.samples = gd.MCSamples(samples=chain,
+                                            loglikes=lnprob,
+                                            weight=weight,
+                                            names = names,
+                                            labels = labels)
+            else:               
+               print('first argument to samples2getdist should be a string or dict.')
+               print('Passed first argument type is: ',type(str_or_dict))
+               
+
+        def triangle(self,**kwargs):
+            #Triangle plot
+            g = gd.plots.getSubplotPlotter()
+            g.triangle_plot(self.samples, filled=True,**kwargs)
+
+        def plot_1d(self,l,**kwargs):
+            #1D marginalized plot
+            g = gd.plots.getSinglePlotter(width_inch=4)        
+            g.plot_1d(self.samples, l,**kwargs)
+
+        def plot_2d(self,l,**kwargs):
+            #Customized 2D filled comparison plot
+            g = gd.plots.getSinglePlotter(width_inch=6, ratio=3 / 5.)       
+            g.plot_1d(self.samples, l,**kwargs)      
+
+        def plot_3d(self,llist):
+            #2D scatter (3D) plot
+            g = gd.plots.getSinglePlotter(width_inch=5)
+            g.plot_3d(self.samples, llist)   
+
+        def save_to_file(self,path=None,dname='chain',froot='test'):
+            #Save to file
+            if path is None:
+                path=tempfile.gettempdir()
+            tempdir = os.path.join(path,dname)
+            if not os.path.exists(tempdir): os.makedirs(tempdir)
+            rootname = os.path.join(tempdir, froot)
+            self.samples.saveAsText(rootname)     
+
+        def load_from_file(self,rootname,**kwargs):
+            #Load from file
+            #self.samples=[]
+            #for f in rootname:
+            self.samples=gd.loadMCSamples(rootname,**kwargs)
+                
+        def thin(self,nminwin=1,nthin=None):
+            if nthin is None:
+                ncorr=max(1,int(self.samples.getCorrelationLength(nminwin)))
+            else:
+                ncorr=nthin
+            print('ncorr=',ncorr)
+            try:
+                self.samples.thin(ncorr)
+            except:
+                print('Thinning not possible. Weight must be interger to apply thinning.')
+
+        def arrays(self):            
+            s=self.samples.samples
+            lnp=-self.samples.loglikes
+            w=self.samples.weights
+            return s, lnp, w
+            
+        def info(self): 
+            #these are just to show getdist functionalities
+            print(self.samples.PCA(['x1','x2']))
+            print(self.samples.getTable().tableTex())
+            print(self.samples.getInlineLatex('x1',limit=1))
+
+except:    
+    print('getdist is not installed. You can not use the wrapper: samples2gdist')                      
+    raise
+
+
+#============================================================
+#======  Here starts the main Evidence calculation code =====
+#============================================================
 
 class echain(object):
-    # nbatch:  number of MCMC samples. The sample sizes at each 
-    # batch is dertermined from brange: 
-    #   if brange= N [constant number] then bscale='constant' 
-    #                 and constant sample sizes at each batch
-    #   if brange is a list
-    #       bscale='lowpower':  equally-spaced logarithmically between limit given by:
-    #                           powmin, powmax: 10^powmin, 10^powmax are 
-    #                           the minimum and maximum numbers of samples.  
-    #       bscale='linear':  equally-spaced linear batch sizes from brange.min() to brange.max()    
-    #                 
-    # kmax:           The results are plotted using kth-nearest-neighbours, with k between 1 and kmax-1. 
-    # method:    a python class with at least __init__(args) and Sampler(nsamples) functions
-    # args:      arguments to be passed to method __init__ function
-    # verbose:   Chattiness of the run - controls how much information is printed to the screen
-    #             0 - very little (only error and warnings)
-    #             1 - Essentials for checking sanity of the evidence calculation
-    #             2 or more - debugging
-    
-    def __init__(self,method,nbatch = 1,
+    def __init__(self,method,ischain=True,
+                     thin=True,nthin=None,
+                     nsample=None,
+                      nbatch=1,
                       brange=None,
-                      bscale='logpower',
-                      kmax    = 5,        
-                      args={},                      
-                      ischain=True,                      
-                      verbose=1,gdkwarg={}):
+                      bscale='',
+                      kmax= 5,        
+                      args={},                                            
+                      gdkwarg={},
+                      verbose=1):
+        """Evidence estimation from MCMC chains
+        :param method: chain name (str) or array (np.ndarray) or python class
+                If string or numpy array, it is interpreted as MCMC chain. 
+                Otherwise, it is interpreted as a python class with at least 
+                a single method sampler and will be used to generate chain.
+
+        :param ischain (bool): True indicates the passed method is to be interpreted as a chain.
+                This is important as a string name can be passed for to 
+                refer to a class or chain name 
+
+        :param nbatch (int): the number of batchs to divide the chain (default=1) 
+               The evidence can be estimated by dividing the whole chain 
+               in n batches. In the case nbatch>1, the batch range (brange) 
+               and batch scaling (bscale) should also be set
+
+        :param brange (int or list): the minimum and maximum size of batches in linear or log10 scale
+               e.g. [3,4] with bscale='logscale' means minimum and maximum batch size 
+               of 10^3 and 10^4. The range is divided nbatch times.
+
+        :param bscale (str): the scaling in batch size. Allowed values are 'log','linear','constant'/
+
+        :param kmax (int): kth-nearest-neighbours, with k between 1 and kmax-1
+
+        :param args (dict): argument to be passed to method. Only valid if method is a class.
+        
+        :param gdkwarg (dict): arguments to be passed to getdist.
+
+        :param verbose: chattiness of the run
+        
+        """
         #
         self.verbose=verbose
         #
         self.nbatch=nbatch
         self.brange=brange #todo: check for [N] 
         self.bscale=bscale if not isinstance(self.brange,int) else 'constant'
+        
         # The arrays of powers and nchain record the number of samples 
         # that will be analysed at each iteration. 
         #idtrial is just an index
@@ -105,27 +222,22 @@ class echain(object):
         self.ischain=ischain
         #
         self.fname=None
+        #
         if ischain:
+            
             if isinstance(method,str):
+                self.fname=method      
                 print('Using chains: ',method)
-                self.fname=method                
-                samples = gd.loadMCSamples(method,**gdkwarg)
-                npar=6
-                self.method={}
-                self.method['samples']=samples.samples[:,0:npar]
-                self.method['lnprob']=-samples.loglikes
-                self.method['weight']=samples.weights                
-                #read chain
             else:
                 print('dictionary of samples and loglike array passed')
-                self.method=method
-            #
-            self.ndim=self.method['samples'].shape[-1] 
-            self.nsample=self.method['samples'].shape[0]
-            #print('init minmax logl',method['lnprob'].min(),method['lnprob'].max())            
-            print('chain array dimensions: %s x %s ='%(self.nsample,self.ndim))
-        else:
-            self.nsample=100000
+                
+        else: #python class which includes a method called sampler
+            
+            if nsample is None:
+                self.nsample=100000
+            else:
+                self.nsample=nsample
+            
             #given a class name, get an instance
             if isinstance(method,str):
                 print('my method',method)
@@ -138,20 +250,34 @@ class echain(object):
                 self.method=XClass
             else:
                 print('eknn: method is class variable .. instantiating class')
-                self.method=XClass(*args)           
-            #
-            self.ndim = self.method.ndim
-         
+                self.method=XClass(*args)                
+                #if passed class has some info, display it
+                try:
+                    print()
+                    msg=self.method.info()                        
+                    print()
+                except:
+                    pass                        
+                # Now Generate samples.
+                # Output should be dict - {'chains':,'logprob':,'weight':} 
+                method=self.method.Sampler(nsamples=self.nsamples)                                 
+                
+        #======== By this line we expect only chains either in file or dict ====
+        self.gd = samples2gdist(method,**gdkwarg)
+        if thin:
+            _=self.gd.thin(nthin=nthin)
+        
+        arr=self.gd.samples.samples
+        npar=arr.shape[-1]
+        #
+        self.ndim=npar
+        self.nsample=arr.shape[0]
+        #print('init minmax logl',method['lnprob'].min(),method['lnprob'].max())            
+        print('chain array dimensions: %s x %s ='%(self.nsample,self.ndim))
+            
         #
         self.set_batch()
-        #
-        if not ischain:    
-            try:
-                print()
-                msg=self.method.info()                        
-                print()
-            except:
-                pass        
+
 
     def summary(self):
         print()
@@ -205,38 +331,26 @@ class echain(object):
                 self.powers=self.idbatch
                 self.nchain=np.array([x for x in self.bsize.cumsum()])
             
-    def get_samples(self,nsamples,istart=0,rand=False,thin=True,nthin=None):    
+    def get_samples(self,nsamples,istart=0,rand=False):    
         # If we are reading chain, it will be handled here 
         # istart -  will set row index to start getting the samples 
         
-        if self.ischain:
-            if rand and not self.brange is None:
-                ntot=self.method['samples'].shape[0]
-                if nsamples>ntot:
-                    print('nsamples=%s, ntotal_chian=%s'%(nsamples,ntot))
-                    raise
-                idx=np.random.randint(0,high=ntot,size=nsamples)
-                samples=self.method['samples'][idx,:]
-                fs=self.method['lnprob'][idx]
-                self.method['weight'][idx] if 'weight' in self.method else np.ones(nsamples)
-            else:
-                samples=self.method['samples'][istart:nsamples+istart,:]
-                fs=self.method['lnprob'][istart:nsamples+istart]    
-                w=self.method['weight'][istart:nsamples+istart] if 'weight' in self.method else np.ones(nsamples)
-                #print('get_samples minmax logl',fs.min(),fs.max())
+        if rand and not self.brange is None:
+            ntot=self.method['samples'].shape[0]
+            if nsamples>ntot:
+                print('nsamples=%s, ntotal_chian=%s'%(nsamples,ntot))
+                raise
+            idx=np.random.randint(0,high=ntot,size=nsamples)
         else:
-            # Generate samples in parameter space by using the passed method        
-            samples,fs=self.method.Sampler(nsamples=nsamples)                 
-            w=np.ones(len(fs))
-            
-        if thin:
-            samples,fs,w=thin_samples(samples,fs,w,nthin=nthin)
+            idx=np.arange(istart,nsamples+istart)
+
+        s,lnp,w=self.gd.arrays()            
                 
-        return samples, fs,w
+        return s[idx,:],lnp[idx],w[idx]
         
 
     def evidence(self,verbose=None,rand=False,profile=False,rprior=1,
-                        nproc=-1,prewhiten=True,thin=True,nthin=None):
+                        nproc=-1,prewhiten=True):
         # MLE=maximum likelihood estimate of evidence:
         #
         
@@ -262,8 +376,7 @@ class echain(object):
             indices = np.zeros((S,kmax+1))
             volume  = np.zeros((S,kmax+1))
             
-            samples_raw,logL,weight=self.get_samples(S,istart=itot,
-                                            rand=rand,thin=thin,nthin=nthin)  
+            samples_raw,logL,weight=self.get_samples(S,istart=itot,rand=rand)  
             
             # Renormalise loglikelihood (temporarily) to avoid underflows:
             logLmax = np.amax(logL)
@@ -271,7 +384,7 @@ class echain(object):
                         
             #print('(mean,min,max) of LogLikelihood: ',fs.mean(),fs.min(),fs.max())
             
-            if not unitvar:
+            if not prewhiten:
                 # Covariance matrix of the samples, and eigenvalues (in w) and eigenvectors (in v):
                 ChainCov = np.cov(samples_raw.T)
                 w,v      = np.linalg.eig(ChainCov)
@@ -322,7 +435,7 @@ class echain(object):
                 # Maximum likelihood estimator for the evidence (this is normalised to the analytic value):
                 SumW     = np.sum(weight)
                 #print('SumW*S*amax*Jacobian',SumW,S,amax,Jacobian)
-                MLE[ipow,k] = math.log(SumW*S*amax*Jacobian) + logLmax
+                MLE[ipow,k] = math.log(SumW*S*amax*Jacobian) + logLmax + math.log(rprior)
             
                 # Output is: for each sample size (S), compute the evidence for kmax-1 different values of k.
                 # Final columm gives the evidence in units of the analytic value.
@@ -352,41 +465,6 @@ class echain(object):
         else:  
             return MLE
     
-    def vis_mle(self,MLE,figsize=(15,15),**kwargs):
-        #visualise 
-        kmax=self.kmax
-        ndim=self.ndim
-        nchain=self.nchain #.cumsum()
-        powers=self.powers
-
-        fig,ax=plt.subplots(figsize=figsize)
-        plt.subplot(2,2,1)
-        plt.plot(powers,np.log10(MLE[:,1:kmax]))
-        plt.xlabel('log N')
-        plt.ylabel('$log(\hat E / E_{true})$')
-        plt.title('Evidence ratio')
-        plt.legend(['k=%s'%k for k in range(1,kmax+1)])
-
-        plt.subplot(2,2,2)
-        plt.plot(nchain,MLE[:,1:kmax])
-        plt.xlabel('N')
-        plt.ylabel('$\hat E / E_{true}$')
-        plt.title('Evidence ratio')
-
-        plt.subplot(2,2,3)
-        plt.plot(1.0/nchain,MLE[:,1:kmax])
-        plt.xlabel('1/N')
-        plt.ylabel('$\hat E / E_{true}$')
-        plt.title('Evidence ratio')
-
-        plt.subplot(2,2,4)
-        plt.plot(pow(nchain,-1.0/ndim),MLE[:,1:kmax])
-        plt.xlabel('$1/N^{1/d}$')
-        plt.ylabel('$\hat E / E_{true}$')
-        plt.title('Evidence ratio')
-
-        plt.tight_layout()        
-
            
 
 #===============================================
@@ -395,8 +473,19 @@ if __name__ == '__main__':
     if len(sys.argv) > 1:
         method=sys.argv[1]
     else:
-        method=alan_eg
-        
-    print('Using Class: ',method)
-    ealan=echain(method=method,verbose=2)
-    ealan.chains2evidence()
+        print("")        
+        print('        Usage: python MCEvidence.py <path/to/chain/file>')
+        print("")
+        print('        Optionaly the first argument can be a ')
+        print('          file name to python class with "sampler" method')
+        print("")
+        sys.exit()
+
+    if len(sys.argv) > 2:
+        verbose=sys.argv[2]
+    else:
+        verbose=1
+    
+    print('Using Chain: ',method)
+    ealan=echain(method,verbose=verbose)
+    ealan.evidence()
