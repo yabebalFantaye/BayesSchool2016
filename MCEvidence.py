@@ -161,7 +161,7 @@ except:
 #======  Here starts the main Evidence calculation code =====
 #============================================================
 
-class echain(object):
+class MCEvidence(object):
     def __init__(self,method,ischain=True,
                      thin=True,nthin=None,
                      nsample=None,
@@ -349,8 +349,10 @@ class echain(object):
         return s[idx,:],lnp[idx],w[idx]
         
 
-    def evidence(self,verbose=None,rand=False,profile=False,rprior=1,
-                        nproc=-1,prewhiten=True):
+    def evidence(self,verbose=None,rand=False,
+                      profile=False,rprior=1,
+                      nproc=-1,prewhiten=True):
+        #
         # MLE=maximum likelihood estimate of evidence:
         #
         
@@ -442,11 +444,12 @@ class echain(object):
                 # The values for different k are clearly not independent. If ndim is large, k=1 does best.
                 if self.brange is None:
                     #print('(mean,min,max) of LogLikelihood: ',fs.mean(),fs.min(),fs.max())
-                    print('k={},nsample={}, dotp={}, median_volume={}, a_max={}, MLE={}'.format( 
-                        k,S,dotp,statistics.median(volume[:,k]),amax,MLE[ipow,k]))
+                    if verbose>1:
+                        print('k={},nsample={}, dotp={}, median_volume={}, a_max={}, MLE={}'.format( 
+                            k,S,dotp,statistics.median(volume[:,k]),amax,MLE[ipow,k]))
                 
                 else:
-                    if verbose>0:
+                    if verbose>1:
                         if ipow==0: 
                             print('(iter,mean,min,max) of LogLikelihood: ',ipow,fs.mean(),fs.min(),fs.max())
                             print('-------------------- useful intermediate parameter values ------- ')
@@ -455,10 +458,11 @@ class echain(object):
          
         if self.brange is None:
             MLE=MLE[0,1:]
-         
-        print()
-        print('MLE[k=(1,2,3,4)] = ',MLE)
-        print()
+
+        if verbose>0:
+            print()
+            print('MLE[k=(1,2,3,4)] = ',MLE)
+            print()
         
         if profile:
             return (MLE, profile_data)
@@ -487,5 +491,5 @@ if __name__ == '__main__':
         verbose=1
     
     print('Using Chain: ',method)
-    ealan=echain(method,verbose=verbose)
-    ealan.evidence()
+    mce=MCEvidence(method,verbose=verbose)
+    mce.evidence()
