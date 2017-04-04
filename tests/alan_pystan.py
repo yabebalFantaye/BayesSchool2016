@@ -103,12 +103,13 @@ if not os.path.exists('figures'):
     os.makedirs('figures')
 
 try:
+    raise
     MLE=np.loadtxt('output/alan_mle.txt')
     ptime=np.loadtxt('output/alan_t_vs_logn_profile.txt')
 except:
     # Here given pystan samples and log probability, we compute evidence ratio 
     ealan=eknn.echain(method=alan_stan_chain,verbose=2,
-                          ischain=True,brange=[3,3.5])
+                          ischain=True,brange=[3,5.2])
     MLE,ptime=ealan.chains2evidence(rand=True,profile=True,nproc=-1) #use all procs 
     ealan.vis_mle(MLE)
 
@@ -153,14 +154,14 @@ except:
             nbrs = NearestNeighbors(n_neighbors=kmax+1,
                                     algorithm='auto',
                                     n_jobs=nproc).fit(alan_stan_chain['samples'][::5,:])
-        
+            nbrs.set_params(n_jobs=nproc)
             DkNN, indices = nbrs.kneighbors(alan_stan_chain['samples'][::5,:])
 
         print('elapsed time: %f ms' % t.secs)
         
     profile_nproc[ipow,0]=nproc
     profile_nproc[ipow,1]=t.secs
-    np.loadtxt('output/alan_t_vs_nproc_profile.txt',profile_nproc)
+    np.savetxt('output/alan_t_vs_nproc_profile.txt',profile_nproc)
     
 # plot KNN timing profile
 print('plotting sckit knn #CPU scaling')
