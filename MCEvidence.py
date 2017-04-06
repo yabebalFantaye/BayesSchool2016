@@ -164,6 +164,7 @@ except:
 class MCEvidence(object):
     def __init__(self,method,ischain=True,
                      thin=True,nthin=None,
+                     ndim=None,burnin=0.2,
                      nsample=None,
                       nbatch=1,
                       brange=None,
@@ -204,6 +205,7 @@ class MCEvidence(object):
         """
         #
         self.verbose=verbose
+        self.info={}
         #
         self.nbatch=nbatch
         self.brange=brange #todo: check for [N] 
@@ -217,7 +219,7 @@ class MCEvidence(object):
         self.bsize  = np.zeros(self.nbatch,dtype=int)
         self.nchain  = np.zeros(self.nbatch,dtype=int)               
         #
-        self.kmax=kmax
+        self.kmax=max(2,kmax)
         #
         self.ischain=ischain
         #
@@ -264,14 +266,32 @@ class MCEvidence(object):
                 
         #======== By this line we expect only chains either in file or dict ====
         self.gd = samples2gdist(method,**gdkwarg)
+        self.nparamMC=self.gd.samples.paramNames.numNonDerived()
+        if ndim is None: ndim=self.nparamMC
+        self.ndim=ndim
+        
+        #get information about input samples
+        sample_shape=self.gd.samples.samples.shape
+        npar=sample_shape[-1]
+        
+        #
+        self.info['Nsamples_read']=sample_shape[0]
+        self.info['Nparams_read']=npar
+        self.info['NparamsMC']=self.nparamMC
+        self.info['NparamsCosmo']=self.ndim        
+        self.info['MaxAutoCorrLen']=np.array([self.gd.samples.getCorrelationLength(j) for j in range(self.ndim)]).max()
+
+        #print('***** ndim,nparamMC,MaxAutoCorrLen :',self.ndim,self.nparamMC,self.info['MaxAutoCorrLen'])
+        
         if thin:
             _=self.gd.thin(nthin=nthin)
-        
-        arr=self.gd.samples.samples
-        npar=arr.shape[-1]
+
+        if burnin>0:
+            self.gd.samples.removeBurn(remove=0.3)
         #
-        self.ndim=npar
-        self.nsample=arr.shape[0]
+        self.nsample=self.gd.samples.samples.shape[0]
+        self.info['Nsamples']=self.nsample #after thinning
+        
         #print('init minmax logl',method['lnprob'].min(),method['lnprob'].max())            
         print('chain array dimensions: %s x %s ='%(self.nsample,self.ndim))
             
@@ -346,11 +366,11 @@ class MCEvidence(object):
 
         s,lnp,w=self.gd.arrays()            
                 
-        return s[idx,:],lnp[idx],w[idx]
+        return s[idx,0:self.ndim],lnp[idx],w[idx]
         
 
-    def evidence(self,verbose=None,rand=False,
-                      profile=False,rprior=1,
+    def evidence(self,verbose=None,rand=False,info=False,
+                      profile=False,rprior=1,pos_lnp=False,
                       nproc=-1,prewhiten=True):
         #
         # MLE=maximum likelihood estimate of evidence:
@@ -363,41 +383,46 @@ class MCEvidence(object):
         kmax=self.kmax
         ndim=self.ndim
         
-        MLE     = np.zeros((self.nbatch,kmax))
-        
-        if profile:
-            print('time profiling scikit knn ..')
-            profile_data = np.zeros((self.nbatch,2))
-        
+        MLE = np.zeros((self.nbatch,kmax))
 
+        #get covariance matrix of chain
+        #ChainCov=self.gd.samples.getCovMat()
+        #eigenVal,eigenVec = np.linalg.eig(ChainCov)
+        #Jacobian = math.sqrt(np.linalg.det(ChainCov))
+        #ndim=len(eigenVal)
+        
         # Loop over different numbers of MCMC samples (=S):
         itot=0
         for ipow,nsample in zip(self.idbatch,self.nchain):                
             S=int(nsample)            
-            DkNN    = np.zeros((S,kmax+1))
-            indices = np.zeros((S,kmax+1))
-            volume  = np.zeros((S,kmax+1))
+            DkNN    = np.zeros((S,kmax))
+            indices = np.zeros((S,kmax))
+            volume  = np.zeros((S,kmax))
             
-            samples_raw,logL,weight=self.get_samples(S,istart=itot,rand=rand)  
-            
+            samples_raw,logL,weight=self.get_samples(S,istart=itot,rand=rand)
+            #
+            if pos_lnp: logL=-logL
+                
             # Renormalise loglikelihood (temporarily) to avoid underflows:
             logLmax = np.amax(logL)
             fs    = logL-logLmax
                         
             #print('(mean,min,max) of LogLikelihood: ',fs.mean(),fs.min(),fs.max())
             
-            if not prewhiten:
+            if prewhiten:
                 # Covariance matrix of the samples, and eigenvalues (in w) and eigenvectors (in v):
                 ChainCov = np.cov(samples_raw.T)
-                w,v      = np.linalg.eig(ChainCov)
+                eigenVal,eigenVec = np.linalg.eig(ChainCov)                
                 Jacobian = math.sqrt(np.linalg.det(ChainCov))
 
                 # Prewhiten:  First diagonalise:
-                samples = np.dot(samples_raw,v);
+                samples = np.dot(samples_raw,eigenVec);
 
+                #print('EigenValues.shape,ndim',eigenVal.shape,ndim)
+                #print('EigenValues=',eigenVal)
                 # And renormalise new parameters to have unit covariance matrix:
                 for i in range(ndim):
-                    samples[:,i]= samples[:,i]/math.sqrt(w[i])
+                    samples[:,i]= samples[:,i]/math.sqrt(eigenVal[i])
             else:
                 #no diagonalisation
                 Jacobian=1
@@ -405,18 +430,9 @@ class MCEvidence(object):
 
             # Use sklearn nearest neightbour routine, which chooses the 'best' algorithm.
             # This is where the hard work is done:
-            if profile:
-                with Timer() as t:
-                    nbrs          = NearestNeighbors(n_neighbors=kmax+1, 
-                                                     algorithm='auto',n_jobs=nproc).fit(samples)
-                    DkNN, indices = nbrs.kneighbors(samples)
-                                    
-                profile_data[ipow,0]=S
-                profile_data[ipow,1]=t.secs                    
-            else:
-                nbrs          = NearestNeighbors(n_neighbors=kmax+1, 
-                                                 algorithm='auto',n_jobs=nproc).fit(samples)
-                DkNN, indices = nbrs.kneighbors(samples)                
+            nbrs = NearestNeighbors(n_neighbors=kmax, 
+                                    algorithm='auto',n_jobs=nproc).fit(samples)
+            DkNN, indices = nbrs.kneighbors(samples)                
     
             # Create the posterior for 'a' from the distances (volumes) to nearest neighbour:
             for k in range(1,self.kmax):
@@ -434,7 +450,7 @@ class MCEvidence(object):
                 # The MAP value of 'a' is obtained analytically from the expression for the posterior:
                 amax = dotp/(S*k+1.0)
     
-                # Maximum likelihood estimator for the evidence (this is normalised to the analytic value):
+                # Maximum likelihood estimator for the evidence
                 SumW     = np.sum(weight)
                 #print('SumW*S*amax*Jacobian',SumW,S,amax,Jacobian)
                 MLE[ipow,k] = math.log(SumW*S*amax*Jacobian) + logLmax + math.log(rprior)
@@ -455,17 +471,20 @@ class MCEvidence(object):
                             print('-------------------- useful intermediate parameter values ------- ')
                             print('nsample, dotp, median volume, amax, MLE')                
                         print(S,k,dotp,statistics.median(volume[:,k]),amax,MLE[ipow,k])
-         
+
+        #MLE[:,0] is zero - return only from k=1
         if self.brange is None:
             MLE=MLE[0,1:]
-
+        else:
+            MLE=MLE[:,1:]
+            
         if verbose>0:
             print()
             print('MLE[k=(1,2,3,4)] = ',MLE)
             print()
         
-        if profile:
-            return (MLE, profile_data)
+        if info:
+            return MLE, self.info
         else:  
             return MLE
     
