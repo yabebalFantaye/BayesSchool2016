@@ -271,14 +271,13 @@ except:
 
 class MCEvidence(object):
     def __init__(self,method,ischain=True,
-                     thin=True,thinfrac=0.1,
-                     ndim=None,burnin=0.2,
+                     thinfrac=0.1,burnfrac=0.2,
+                     ndim=None, kmax= 5, 
                      priorvolume=1,debug=False,
                      nsample=None,
                       nbatch=1,
                       brange=None,
                       bscale='',
-                      kmax= 5,        
                       args={},                                            
                       gdkwarg={},
                       verbose=1):
@@ -383,9 +382,9 @@ class MCEvidence(object):
         self.info['Nsamples_read']=self.gd.get_shape()[0]
         self.info['Nparams_read']=self.gd.get_shape()[1]
         #
-        if burnin>0:
-            _=self.gd.removeBurn(remove=burnin)
-        if thin:
+        if burnfrac>0:
+            _=self.gd.removeBurn(remove=burnfrac)
+        if thinfrac>0:
             _=self.gd.thin_poisson(thinfrac)
 
         #after burn-in and thinning
