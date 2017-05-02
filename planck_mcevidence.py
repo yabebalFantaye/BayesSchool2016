@@ -41,7 +41,9 @@ from __future__ import print_function
 import sys
 import os
 import glob
+import functools
 import numpy as np
+import math
 import pandas as pd
 from tabulate import tabulate
 import pickle
@@ -53,9 +55,26 @@ import logging
 from MCEvidence import MCEvidence
 
 
-def h0_gauss_lnp(ParSamples,H0=73.24,H0_Err=1.74):
-    frac=(ParSamples.H0 - H0)/H0_Err
-    return 0.5*((frac**2.0))    
+def h0_gauss_lnp(ParSamples,icol=1,H0=73.24,H0_Err=1.74):
+    #print('parsamples',dir(ParSamples))
+    # sigma_h = 1.74
+    # hbar    = 73.24
+    # loglikes=np.zeros(len(p))
+    # for i, h, in enumerate(p):
+    #     loglikes[i] = math.exp(-0.5*math.pow((h-hbar)/sigma_h,2))/(math.sqrt(2.*math.pi)*sigma_h)
+    #def loglikes():
+    try:
+        p=ParSamples.H0
+    except:
+        p=ParSamples[:,icol]
+    print('H0 limits: ',p.min(),p.max())
+
+    frac=(p - H0)/H0_Err
+    lognorm=np.log(np.sqrt(2.*np.pi)*H0_Err)
+    lnl=0.5*(frac**2.0) + lognorm
+    return lnl
+        
+    #return loglikes()
         
      
     
@@ -97,7 +116,7 @@ parser.add_argument("-t","--thin", "--thinfrac",
                     help="Thinning fraction")
 parser.add_argument("-o","--out", "--outdir",
                     dest="outdir",
-                    default='planck_mce_fullGrid_R2_H0Reiss2016',
+                    default='planck_mce_fullGrid_R2_H0Reiss2016_1d',
                     help="Output directory name")
 parser.add_argument("--N","--name",
                     dest="name",
@@ -183,6 +202,7 @@ cosmo_params=['omegabh2','omegach2','theta','tau','omegak','mnu','meffsterile','
 # available in the planck fullgrid directory.
 DataSets=['plikHM_TT_lowTEB','plikHM_TT_lowTEB_post_BAO','plikHM_TT_lowTEB_post_lensing','plikHM_TT_lowTEB_post_H070p6','plikHM_TT_lowTEB_post_JLA','plikHM_TT_lowTEB_post_zre6p5','plikHM_TT_lowTEB_post_BAO_H070p6_JLA','plikHM_TT_lowTEB_post_lensing_BAO_H070p6_JLA','plikHM_TT_lowTEB_BAO','plikHM_TT_lowTEB_BAO_post_lensing','plikHM_TT_lowTEB_BAO_post_H070p6','plikHM_TT_lowTEB_BAO_post_H070p6_JLA','plikHM_TT_lowTEB_lensing','plikHM_TT_lowTEB_lensing_post_BAO','plikHM_TT_lowTEB_lensing_post_zre6p5','plikHM_TT_lowTEB_lensing_post_BAO_H070p6_JLA','plikHM_TT_tau07plikHM_TT_lowTEB_lensing_BAO','plikHM_TT_lowTEB_lensing_BAO_post_H070p6','plikHM_TT_lowTEB_lensing_BAO_post_H070p6_JLA','plikHM_TTTEEE_lowTEB','plikHM_TTTEEE_lowTEB_post_BAO','plikHM_TTTEEE_lowTEB_post_lensing','plikHM_TTTEEE_lowTEB_post_H070p6','plikHM_TTTEEE_lowTEB_post_JLA','plikHM_TTTEEE_lowTEB_post_zre6p5','plikHM_TTTEEE_lowTEB_post_BAO_H070p6_JLA','plikHM_TTTEEE_lowTEB_post_lensing_BAO_H070p6_JLA','plikHM_TTTEEE_lowl_lensing','plikHM_TTTEEE_lowl_lensing_post_BAO','plikHM_TTTEEE_lowl_lensing_post_BAO_H070p6_JLA','plikHM_TTTEEE_lowTEB_lensing']
 
+DataSets=['plikHM_TTTEEE_lowTEB'] #DataSets[0:1] #
 
 # Types of model to consider. Below a more
 # comprehensive list is defined using wildcards.
@@ -195,7 +215,13 @@ Models['model']=['base','base_omegak','base_Alens','base_Alensf','base_nnu','bas
                  'base_nnu_r','base_nrun_r','base_nnu_yhe','base_w_wa',\
                  'base_nnu_meffsterile','base_nnu_meffsterile_r']
 
- 
+Models['priorvolume'] = [1, 0.6, 10., 10., 9.95, 5.,\
+                         2., 3., 4., 2., 10., 0.4,\
+                         50., 3., 20., 49.75,\
+                         29.85, 3.98, 20.0,\
+                         29.85, 89.55]
+pvol={k:v for k,v in zip(Models['model'],Models['priorvolume'])}
+
 #---------------------------------------
 #-------- define some useful functions -
 #---------------------------------------
@@ -287,10 +313,12 @@ all_df={} #dictionary to store all results
 if nchain == 0:  #use all available chains
     mce_cols=['AllChains']
     chains_extension_list=['']
+    chains_extension_id=[0]
     outdir='{}/AllChains/'.format(outdir) 
     outdir_data='{}/csv'.format(outdir)    
 else:
     chains_extension_list=['_%s.txt'%x for x in range(1,nchain+1)]
+    chains_extension_id=[x for x in range(1,nchain+1)]    
     mce_cols=['chain%s'%k for k in range(1,nchain+1)]
     outdir='{}/SingleChains/'.format(outdir) 
     outdir_data='{}/csv'.format(outdir)        
@@ -322,27 +350,38 @@ for ipp in range(lpp[rank]):  #loop over data
     # the volume of the base model 
     vol_norm=1.0    
     for imm,mm,fname in zip(range(len(name)),name, path_list): #model loop
-        if glob.glob(fname+'*.txt'):
+        if glob.glob(fname+'*.txt') and mm in ['base','base_omegak']:
+        
+            ParamsFile=fname+'.paramnames'
+            with open(ParamsFile,"r") as f: 
+                for iline,line in enumerate(f):
+                    #print('paramsnames line: ',line)                    
+                    if line.startswith('H0'):
+                        iparam=iline
+            print('H0 is line ',iparam)
+            extFunc=functools.partial(h0_gauss_lnp,icol=iparam)
             
             parMC=params_info(fname)
             if mm=='base':  #base model
                 vol_norm=parMC['volume']
                 
-            prior_volume=parMC['volume']/vol_norm 
+            prior_volume=pvol[mm]  #parMC['volume']/vol_norm
+            print('***volume alan, me',prior_volume, parMC['volume']/vol_norm)
             ndim=parMC['ndim'] 
             #            
             mce_info['PriorVol'].append(prior_volume)
             mce_info['ndim'].append(ndim)            
             #
-            logger.debug('***model: {},  ndim:{}, volume:{}, name={}'.format(mm,ndim,prior_volume,parMC['name']))
+            logger.info('***model: {},  ndim:{}, volume:{}, name={}'.format(mm,ndim,prior_volume,parMC['name']))
             #
             nc_read=''
             nc_use=''
 
             for icc, cext in enumerate(chains_extension_list):
-                fchain=fname+cext
-                e,info = MCEvidence(fchain,ndim=ndim,isfunc=h0_gauss_lnp,
-                                    priorvolume=prior_volume,
+                idchain=chains_extension_id[icc]
+                fchain=fname                
+                e,info = MCEvidence(fchain,ndim=ndim,isfunc=extFunc,
+                                    priorvolume=prior_volume,idchain=idchain,
                                     kmax=kmax,verbose=verbose,burnlen=burnfrac,
                                     thinlen=thinfrac).evidence(info=True,pos_lnp=False)
                 mce[imm,icc]=e[0]
