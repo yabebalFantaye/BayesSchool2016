@@ -34,8 +34,9 @@ kmax    = 2
 nchains = 4
 
 # Thinning level:
+np.random.seed(1)
 thinningFraction    = 0.1
-thinning            = False
+thinning            = True
 
 DoAll = False
 
