@@ -506,13 +506,24 @@ if rank==0:
         if os.path.exists(fname):
             os.remove(fname)
 
-#---------------------------------------
-# gather all delta_lnE in one big array
-#---------------------------------------
-all_df = comm.gather(all_df, root=0)
-if rank==0:
+    #---------------------------------------
+    # gather all delta_lnE in one big array
+    #---------------------------------------
+    
+    all_df = {}#comm.gather(all_df, root=0)
+    for dd in main_loop_list:
+        fin=fout_df.format(dd)
+        if os.path.exists(fin):        
+            df=pd.read_csv(fin,index_col='Unnamed: 0')            
+            #collect delta_lnE in a dictionary
+            xx=dd
+            all_df[dd] = df['delta_lnE_k1']
+            print(' len:',len(all_df[dd]), 'len model:',len(model_list))
+    #print(xx)
+    print( all_df[xx]  )
+    
     logger.debug('after gather type(delta_lnE_df)=',type(all_df))
-    all_df={ k: v for d in all_df for k, v in d.items() }
+    #all_df={ k: v for d in all_df for k, v in all_df[d].items() }
     if verbose>1:
         print('after_gather and concat: all_df.keys:',all_df.keys())
 
@@ -522,17 +533,23 @@ if rank==0:
     pickle.dump(all_df, open(fout_pkl, "wb") )
 
     #concat all
-    big_df=pd.DataFrame(index=model_list)
-    for dd,df in all_df.items():
-        big_df[dd]=df
-
-
+    big_df=pd.DataFrame.from_dict(all_df) #index=model_list)
+    #big_df.index=model_list
+    
+    #for dd,df in all_df.items():
+    #    big_df[dd]=df
+    
     #sort big_df based on DataSets order
     df=big_df.T
+    #print(df)
     s = pd.Series(df.index.values,dtype='category')
     s.cat.set_categories(DataSets, inplace=True)
     big_df=df.reindex(s.sort_values()).T
-        
+
+    s = pd.Series(big_df.index.values,dtype='category')
+    s.cat.set_categories(model_list, inplace=True)
+    big_df=big_df.reindex(s.sort_values())
+    
     # Save a dictionary into a pickle file.
     fout_pkl='{0}/delta_lnE_all_df.pkl'.format(outdir_data)
     logger.info('writting : %s '%fout_pkl)    
