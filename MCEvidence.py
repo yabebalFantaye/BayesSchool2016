@@ -770,11 +770,61 @@ if __name__ == '__main__':
         print("")
         sys.exit()
 
-    if len(sys.argv) > 2:
-        verbose=sys.argv[2]
-    else:
-        verbose=1
+    #---------------------------------------
+    #---- Extract command line arguments ---
+    #---------------------------------------
+    parser = ArgumentParser(description='Planck Chains MCEvidence.')
+
+    # positional args
+    parser.add_argument("method",metavar='method',help='Root filename for MCMC chains or or python class filename')
+                        
+    # optional args
+    parser.add_argument("-k", "--kmax",
+                        dest="kmax",
+                        default=2,
+                        type=int,
+                        help="scikit maximum K-NN ")
+    parser.add_argument("-ic", "--idchain",
+                        dest="idchain",
+                        default=0,
+                        type=int,
+                        help="Which chains to use - the id e.g 1 means read only *_1.txt (default=None - use all available) ")
+    parser.add_argument("-np", "--ndim",
+                        dest="ndim",
+                        default=None,
+                        type=int,                    
+                        help="How many parameters to use (default=None - use all params) ")
+    parser.add_argument("-b","--burnfrac", "--burnin","--remove",
+                        dest="burnfrac",
+                        default=0,
+                        type=float,                    
+                        help="Burn-in fraction")
+    parser.add_argument("-t","--thin", "--thinfrac",
+                        dest="thinfrac",
+                        default=0,
+                        type=float,
+                        help="Thinning fraction")
+    parser.add_argument("-v", "--verbose",
+                        dest="verbose",
+                        default=1,
+                        type=int,
+                        help="increase output verbosity")
+
+    args = parser.parse_args()
+
+    #-----------------------------
+    #------ control parameters----
+    #-----------------------------
+    kmax=args.kmax
+    idchain=args.idchain 
+    prior_volume=args.prior_volume
+    ndim=args.ndim
+    burnfrac=args.burnfrac
+    thinfrac=args.thinfrac
+    verbose=args.verbose
     
     print('Using Chain: ',method)
-    mce=MCEvidence(method,verbose=verbose)
+    mce=MCEvidence(method,ndim=ndim,priorvolume=prior_volume,idchain=idchain,
+                                    kmax=kmax,verbose=verbose,burnlen=burnfrac,
+                                    thinlen=thinfrac)
     mce.evidence()

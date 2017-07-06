@@ -55,6 +55,28 @@ import logging
 from MCEvidence import MCEvidence
 
 
+def H0prior(ParSamples,icol=1,hdata='Riess'):
+    try:
+        h=ParSamples.H0
+    except:
+        h=ParSamples[:,icol]
+    print('%s H0 limits: '%hdata,h.min(),h.max())
+    
+    if(hdata=='Riess'):
+        # From Riess et al 2016:
+        sigma_h = 1.74
+        hbar    = 73.24
+    elif(hdata=='Feeney'):
+        # From Feeney et al. 2017
+        sigma_h = 1.67
+        hbar    = 72.67
+    elif(hdata=='Feeney_all'):
+        sigma_h = 1.78
+        hbar    = 73.15
+    
+    h0prior = 0.5*((h-hbar)/sigma_h)**2.0 + np.log((np.sqrt(2.*np.pi)*sigma_h))
+    return h0prior
+
 def h0_gauss_lnp(ParSamples,icol=1,H0=73.24,H0_Err=1.74):
     #print('parsamples',dir(ParSamples))
     # sigma_h = 1.74
@@ -122,6 +144,15 @@ parser.add_argument("--N","--name",
                     dest="name",
                     default='mce',
                     help="base name for output files")
+parser.add_argument("-h0","--hdata",
+                    dest="hdata",
+                    default='Riess',
+                    help="base name for output files")
+parser.add_argument("--fcat","--cat_file",
+                    dest="fcat",
+                    action='store_true',
+                    default=False,
+                    help="concat MCE files")
 parser.add_argument("-v", "--verbose",
                     dest="verbose",
                     default=1,
@@ -133,12 +164,16 @@ args = parser.parse_args()
 #-----------------------------
 #------ control parameters----
 #-----------------------------
+fcat=args.fcat
+call_mce=not fcat
+print('fcat, call mce: ',fcat,call_mce)
 kmax=args.kmax
 nchain=args.nchain 
 nmodel=args.nmodel
 ndata=args.ndata
 outdir=args.outdir
 basename=args.name
+hdata=args.hdata
 burnfrac=args.burnfrac
 thinfrac=args.thinfrac
 verbose=args.verbose
@@ -202,7 +237,7 @@ cosmo_params=['omegabh2','omegach2','theta','tau','omegak','mnu','meffsterile','
 # available in the planck fullgrid directory.
 DataSets=['plikHM_TT_lowTEB','plikHM_TT_lowTEB_post_BAO','plikHM_TT_lowTEB_post_lensing','plikHM_TT_lowTEB_post_H070p6','plikHM_TT_lowTEB_post_JLA','plikHM_TT_lowTEB_post_zre6p5','plikHM_TT_lowTEB_post_BAO_H070p6_JLA','plikHM_TT_lowTEB_post_lensing_BAO_H070p6_JLA','plikHM_TT_lowTEB_BAO','plikHM_TT_lowTEB_BAO_post_lensing','plikHM_TT_lowTEB_BAO_post_H070p6','plikHM_TT_lowTEB_BAO_post_H070p6_JLA','plikHM_TT_lowTEB_lensing','plikHM_TT_lowTEB_lensing_post_BAO','plikHM_TT_lowTEB_lensing_post_zre6p5','plikHM_TT_lowTEB_lensing_post_BAO_H070p6_JLA','plikHM_TT_tau07plikHM_TT_lowTEB_lensing_BAO','plikHM_TT_lowTEB_lensing_BAO_post_H070p6','plikHM_TT_lowTEB_lensing_BAO_post_H070p6_JLA','plikHM_TTTEEE_lowTEB','plikHM_TTTEEE_lowTEB_post_BAO','plikHM_TTTEEE_lowTEB_post_lensing','plikHM_TTTEEE_lowTEB_post_H070p6','plikHM_TTTEEE_lowTEB_post_JLA','plikHM_TTTEEE_lowTEB_post_zre6p5','plikHM_TTTEEE_lowTEB_post_BAO_H070p6_JLA','plikHM_TTTEEE_lowTEB_post_lensing_BAO_H070p6_JLA','plikHM_TTTEEE_lowl_lensing','plikHM_TTTEEE_lowl_lensing_post_BAO','plikHM_TTTEEE_lowl_lensing_post_BAO_H070p6_JLA','plikHM_TTTEEE_lowTEB_lensing']
 
-DataSets=['plikHM_TTTEEE_lowTEB'] #DataSets[0:1] #
+#DataSets=['plikHM_TTTEEE_lowTEB'] #DataSets[0:1] #
 
 # Types of model to consider. Below a more
 # comprehensive list is defined using wildcards.
@@ -331,118 +366,120 @@ if not os.path.exists(outdir_data):
 # Column names for useful information outputs
 mce_info_cols=['PriorVol','ndim','N_read','N_used']
 
-for ipp in range(lpp[rank]):  #loop over data
-    ig=ipp+lpp[0:rank-1].sum()
-    kk=main_loop_list[ig]
-    logger.debug('*** mpi_rank, idd, loop_key',rank, ig, kk)
+if call_mce:
+    for ipp in range(lpp[rank]):  #loop over data
+        ig=ipp+lpp[0:rank-1].sum()
+        kk=main_loop_list[ig]
+        logger.debug('*** mpi_rank, idd, loop_key',rank, ig, kk)
 
-    kk_name='data'
-    idd=ig
-    dd=kk
-    dd_dir=dd.split('_post_')[0]  
-    dd_name=dd #dd.split('plikHM_')[0]    
+        kk_name='data'
+        idd=ig
+        dd=kk
+        dd_dir=dd.split('_post_')[0]  
+        dd_name=dd #dd.split('plikHM_')[0]    
 
-    path_list, name=avail_model_list(dd,nmax=nmodel)
-    mce=np.zeros((len(path_list),len(mce_cols)))
-    mce_info={ k:[] for k in mce_info_cols }
+        path_list, name=avail_model_list(dd,nmax=nmodel)
+        mce=np.zeros((len(path_list),len(mce_cols)))
+        mce_info={ k:[] for k in mce_info_cols }
 
-    # prior volumes will be normalized by
-    # the volume of the base model 
-    vol_norm=1.0    
-    for imm,mm,fname in zip(range(len(name)),name, path_list): #model loop
-        if glob.glob(fname+'*.txt') and mm in ['base','base_omegak']:
-        
-            ParamsFile=fname+'.paramnames'
-            with open(ParamsFile,"r") as f: 
-                for iline,line in enumerate(f):
-                    #print('paramsnames line: ',line)                    
-                    if line.startswith('H0'):
-                        iparam=iline
-            print('H0 is line ',iparam)
-            extFunc=functools.partial(h0_gauss_lnp,icol=iparam)
-            
-            parMC=params_info(fname)
-            if mm=='base':  #base model
-                vol_norm=parMC['volume']
-                
-            prior_volume=pvol[mm]  #parMC['volume']/vol_norm
-            print('***volume alan, me',prior_volume, parMC['volume']/vol_norm)
-            ndim=parMC['ndim'] 
-            #            
-            mce_info['PriorVol'].append(prior_volume)
-            mce_info['ndim'].append(ndim)            
-            #
-            logger.info('***model: {},  ndim:{}, volume:{}, name={}'.format(mm,ndim,prior_volume,parMC['name']))
-            #
-            nc_read=''
-            nc_use=''
+        # prior volumes will be normalized by
+        # the volume of the base model 
+        vol_norm=1.0    
+        for imm,mm,fname in zip(range(len(name)),name, path_list): #model loop
+            if glob.glob(fname+'*.txt') : #and mm in ['base','base_omegak']
 
-            for icc, cext in enumerate(chains_extension_list):
-                idchain=chains_extension_id[icc]
-                fchain=fname                
-                e,info = MCEvidence(fchain,ndim=ndim,isfunc=extFunc,
-                                    priorvolume=prior_volume,idchain=idchain,
-                                    kmax=kmax,verbose=verbose,burnlen=burnfrac,
-                                    thinlen=thinfrac).evidence(info=True,pos_lnp=False)
-                mce[imm,icc]=e[0]
-                icc+=1
-                nc_read=nc_read+'%s,'%info['Nsamples_read']
-                nc_use=nc_use+'%s,'%info['Nsamples']
-                
-            mce_info['N_read'].append(nc_read)
-            mce_info['N_used'].append(nc_use)
-        else:
-            print('*** not available: ',fname)
-            mce[imm,:]=np.nan
-            mce_info['N_read'].append('')
-            mce_info['N_used'].append('')
-            mce_info['PriorVol'].append(0)
-            mce_info['ndim'].append(0)             
-    
-    # At this stage evidence for a single data and all available
-    # models is computed. Put the array in pandas DataFrame
-    # and save it to a file 
-    if not np.all(np.isnan(mce)):
-        df = pd.DataFrame(mce,index=name,columns=mce_cols)
-        df_mean=df.mean(axis=1)        
-        if nchain>0:
-            df_std=df.std(axis=1)        
-            df['Mean_lnE_k1'] =df_mean
-            df['Err_lnE_k1'] = df_std/np.sqrt(nchain*1.0)
-        df['delta_lnE_k1'] =df_mean-df_mean.max()
-        for k in mce_info_cols:
-            df[k]=mce_info[k]
+                ParamsFile=fname+'.paramnames'
+                with open(ParamsFile,"r") as f: 
+                    for iline,line in enumerate(f):
+                        #print('paramsnames line: ',line)                    
+                        if line.startswith('H0'):
+                            iparam=iline
+                print('H0 is line ',iparam)
+                #extFunc=functools.partial(h0_gauss_lnp,icol=iparam)
+                extFunc=functools.partial(H0prior,icol=iparam,hdata=hdata)
 
-        #collect delta_lnE in a dictionary
-        all_df[dd] = df['delta_lnE_k1']
-        
-        # print info    
-        logging.info('--------------- {}---------'.format(kk))
-        if verbose>0:
-            print(tabulate(df, headers='keys', tablefmt='psql',floatfmt=".2f", numalign="left"))
+                parMC=params_info(fname)
+                if mm=='base':  #base model
+                    vol_norm=parMC['volume']
 
-        #--------- outputs ----------
-        # first write to text file
-        fout=fout_txt.format(kk)
-        logging.info('rank={}, writing file to {}'.format(rank,fout))
-        fhandle=open(fout, 'w')
-        if rank==0:
+                prior_volume=pvol[mm]  #parMC['volume']/vol_norm
+                print('***volume alan, me',prior_volume, parMC['volume']/vol_norm)
+                ndim=parMC['ndim'] 
+                #            
+                mce_info['PriorVol'].append(prior_volume)
+                mce_info['ndim'].append(ndim)            
+                #
+                logger.info('***model: {},  ndim:{}, volume:{}, name={}'.format(mm,ndim,prior_volume,parMC['name']))
+                #
+                nc_read=''
+                nc_use=''
+
+                for icc, cext in enumerate(chains_extension_list):
+                    idchain=chains_extension_id[icc]
+                    fchain=fname                
+                    e,info = MCEvidence(fchain,ndim=ndim,isfunc=extFunc,
+                                        priorvolume=prior_volume,idchain=idchain,
+                                        kmax=kmax,verbose=verbose,burnlen=burnfrac,
+                                        thinlen=thinfrac).evidence(info=True,pos_lnp=False)
+                    mce[imm,icc]=e[0]
+                    icc+=1
+                    nc_read=nc_read+'%s,'%info['Nsamples_read']
+                    nc_use=nc_use+'%s,'%info['Nsamples']
+
+                mce_info['N_read'].append(nc_read)
+                mce_info['N_used'].append(nc_use)
+            else:
+                print('*** not available: ',fname)
+                mce[imm,:]=np.nan
+                mce_info['N_read'].append('')
+                mce_info['N_used'].append('')
+                mce_info['PriorVol'].append(0)
+                mce_info['ndim'].append(0)             
+
+        # At this stage evidence for a single data and all available
+        # models is computed. Put the array in pandas DataFrame
+        # and save it to a file 
+        if not np.all(np.isnan(mce)):
+            df = pd.DataFrame(mce,index=name,columns=mce_cols)
+            df_mean=df.mean(axis=1)        
+            if nchain>0:
+                df_std=df.std(axis=1)        
+                df['Mean_lnE_k1'] =df_mean
+                df['Err_lnE_k1'] = df_std/np.sqrt(nchain*1.0)
+            df['delta_lnE_k1'] =df_mean-df_mean.max()
+            for k in mce_info_cols:
+                df[k]=mce_info[k]
+
+            #collect delta_lnE in a dictionary
+            all_df[dd] = df['delta_lnE_k1']
+
+            # print info    
+            logging.info('--------------- {}---------'.format(kk))
+            if verbose>0:
+                print(tabulate(df, headers='keys', tablefmt='psql',floatfmt=".2f", numalign="left"))
+
+            #--------- outputs ----------
+            # first write to text file
+            fout=fout_txt.format(kk)
+            logging.info('rank={}, writing file to {}'.format(rank,fout))
+            fhandle=open(fout, 'w')
+            if rank==0:
+                fhandle.write('\n')
+                fhandle.write('############## RootDirectory={} ########\n'.format(rootdir))
+                fhandle.write('\n')
+
+            fhandle.write('\n')                
+            fhandle.write('************ {} ************'.format(kk))
+            fhandle.write('\n')                
+            fhandle.write(tabulate(df, headers='keys', tablefmt='psql',floatfmt=".2f", numalign="left"))
             fhandle.write('\n')
-            fhandle.write('############## RootDirectory={} ########\n'.format(rootdir))
-            fhandle.write('\n')
+            fhandle.close()
 
-        fhandle.write('\n')                
-        fhandle.write('************ {} ************'.format(kk))
-        fhandle.write('\n')                
-        fhandle.write(tabulate(df, headers='keys', tablefmt='psql',floatfmt=".2f", numalign="left"))
-        fhandle.write('\n')
-        fhandle.close()
+            # write dataframe to csv file
+            fout=fout_df.format(kk)
+            df.to_csv(fout)
 
-        # write dataframe to csv file
-        fout=fout_df.format(kk)
-        df.to_csv(fout)
-   
-        #--------- big MPI loop finish here ----
+            #--------- big MPI loop finish here ----
 
 #--------------------------------
 # wait for all process to finish
